@@ -4,7 +4,7 @@
 import numpy as np
 
 from chainladder import ARRAY_BACKEND
-
+from chainladder.utils.sparse import sp
 
 try:
     import cupy as cp
@@ -19,7 +19,8 @@ except:
 
 def get_array_module(*args, **kwargs):
     """ default array module when cupy is not present """
-    return np
+    module = type(args[0]).__module__.split('.')[0]
+    return {'cupy': cp, 'numpy': np, 'COO': sp, 'sparse': sp}[module]
 
 def nansum(a, *args, **kwargs):
     """ For cupy v0.6.0 compatibility """
@@ -49,5 +50,4 @@ if module == 'cupy' and int(cp.__version__.split('.')[0]) < 7:
     cp.nanpercentile = nanpercentile
     cp.unique = unique
 
-if module == 'numpy':
-    cp.get_array_module = get_array_module
+cp.get_array_module = get_array_module

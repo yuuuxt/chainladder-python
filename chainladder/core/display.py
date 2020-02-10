@@ -64,6 +64,9 @@ class TriangleDisplay():
             ddims = self.ddims
         if cp.get_array_module(self.values).__name__ == 'cupy':
             out = cp.asnumpy(self.values[0, 0])
+        elif cp.get_array_module(self.values).__name__ in ['sparse', 'COO']:
+            out = self.values[0, 0].todense()
+            out[out == 0] = np.nan
         else:
             out = self.values[0, 0]
         out = pd.DataFrame(out, index=origin, columns=ddims)

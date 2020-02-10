@@ -89,8 +89,13 @@ class TriangleBase(TriangleIO, TriangleDisplay, TriangleSlicer,
         self.valuation_date = development_date.max()
         self.key_labels = index
         self._set_slicers()
+        self.nan_override = False
+        self.valuation = self._valuation_triangle()
+        self.is_cumulative = cumulative
         # Create 4D Triangle
-        xp = np
+        if self.array_backend == 'sparse':
+            self.values = sparse.COO.from_numpy(values, fill_value=np.nan)
+            return
         if self.array_backend == 'numpy':
             xp = np
         else:
@@ -99,10 +104,7 @@ class TriangleBase(TriangleIO, TriangleDisplay, TriangleSlicer,
                 warnings.warn('Unable to load CuPY.  Using numpy instead.')
                 self.array_backend = 'numpy'
         self.values = xp.array(values, dtype=kwargs.get('dtype', None))
-        # Used to show NANs in lower part of triangle
-        self.nan_override = False
-        self.valuation = self._valuation_triangle()
-        self.is_cumulative = cumulative
+
 
     def _len_check(self, x, y):
         if len(x) != len(y):

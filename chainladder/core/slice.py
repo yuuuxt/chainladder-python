@@ -155,7 +155,7 @@ class TriangleSlicer:
         if xp == cp:
             nan_tri = cp.array(nan_tri)
         obj.values = (obj.values*nan_tri)
-        obj.values = xp.take(xp.take(obj.values, o_idx, -2), d_idx, -1)
+        obj.values = obj.values[:, :, o_idx, :][:, :, :, d_idx]
         return self._cleanup_slice(obj)
 
     def _slice_development(self, key):

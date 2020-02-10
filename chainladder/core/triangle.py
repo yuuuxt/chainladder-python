@@ -5,6 +5,8 @@
 import pandas as pd
 import numpy as np
 from chainladder.utils.cupy import cp
+from chainladder.utils.sparse import sp
+import sparse
 import copy
 
 
@@ -159,7 +161,8 @@ class Triangle(TriangleBase):
         xp = cp.get_array_module(self.values)
         obj = copy.deepcopy(self)
         temp = obj.values.copy()
-        temp[temp == 0] = np.nan
+        if xp != sp:
+            temp[temp == 0] = np.nan
         val_array = obj.valuation.to_timestamp().values.reshape(
             obj.shape[-2:], order='f')[:, 1:]
         obj.values = temp[..., 1:]/temp[..., :-1]
@@ -279,8 +282,13 @@ class Triangle(TriangleBase):
             Updated instance of triangle with valuation periods.
         '''
         if inplace:
-            self = self._val_dev_chg('dev_to_val') if not self.is_val_tri else self
-            return self
+            if self.is_val_tri:
+                return self
+            if self.is_ultimate:
+                ult = self[self.development==9999]
+                self = self[self.development<9999]
+                self = self._val_dev_chg('dev_to_val')
+                return self
         return self._val_dev_chg('dev_to_val') if not self.is_val_tri else copy.deepcopy(self)
 
     def val_to_dev(self, inplace=False):
@@ -323,8 +331,55 @@ class Triangle(TriangleBase):
             self = ret_val
         return ret_val
 
-
     def _val_dev_chg(self, kind):
+        index = np.arange(1, np.prod(self.shape[2:])+1).reshape(self.shape[2:])
+        idx_s = sparse.COO.from_numpy(index)
+        dev_grain_dict = {'M': {'Y': 12, 'Q': 3, 'M': 1},
+                          'Q': {'Y': 4, 'Q': 1},
+                          'Y': {'Y': 1}}
+        offset = dev_grain_dict[self.development_grain][self.origin_grain]
+        if kind == 'val_to_dev':
+            reshape = np.append(
+                index.flatten(order='C'),
+                np.zeros(index.shape[0] * offset)
+            ).reshape(-1, index.shape[1]+offset)
+        else:
+            reshape = np.concatenate(
+                (index, np.zeros((index.shape[0], index.shape[1]+offset))),
+                axis=1)
+            reshape = reshape.flatten(order='C')[:-index.shape[0]*offset].reshape(index.shape[0],-1)[:, :-1]
+        new_idx_s = sparse.COO.from_numpy(reshape)
+        o_dict = dict(zip(
+            [str(item) for item in pd.DataFrame(idx_s.coords.T).to_records(index=False)],
+            idx_s.data))
+        n_dict = dict(zip(
+            new_idx_s.data.astype(int),
+            pd.DataFrame(new_idx_s.coords.T).to_records(index=False)))
+        idx_mapper = {k: n_dict[v] for k, v in o_dict.items()}
+        values = sparse.COO.from_numpy(self.values, fill_value=np.nan)
+        values.coords[2:] = np.array(
+            [list(idx_mapper[str(item)])
+             for item in pd.DataFrame(values.coords[2:].T).to_records(index=False)]).T
+        values.shape = tuple(list(values.shape[:-1]) + [new_idx_s.shape[-1]])
+        if kind == 'val_to_dev':
+            self.values = values[...,:-offset].todense()
+            d_map = {'Y':12, 'Q': 3, 'M': 1}
+            dev = pd.Series(self.ddims.to_timestamp(how='e'), name='dev').to_frame()
+            dev['orig'] = self.origin[0].to_timestamp(how='s')
+            self.ddims = (self._development_lag(dev['orig'], dev['dev']) * \
+                         d_map[self.development_grain]).values
+            self.valuation = self._valuation_triangle()
+        else:
+            self.values = values.todense()
+            values.shape = tuple(list(values.shape[:-1]) + [new_idx_s.shape[-1]])
+            self.ddims = self.valuation.unique().sort_values()
+            self.valuation = pd.PeriodIndex(
+                np.repeat(self.ddims.values[np.newaxis],
+                          len(self.origin)).reshape(1, -1).flatten())
+        return self#.dropna()
+
+
+    def _val_dev_chg2(self, kind):
         xp = cp.get_array_module(self.values)
         obj = copy.deepcopy(self)
         o_vals = obj._expand_dims(xp.arange(len(obj.origin))[:, xp.newaxis])
@@ -350,14 +405,22 @@ class Triangle(TriangleBase):
                 val = np.where(obj._expand_dims(obj.valuation == item)
                                   .reshape(obj.shape, order='f'))[-2:]
             val = np.unique(np.array(list(zip(val[0], val[1]))), axis=0)
-            arr = xp.expand_dims(obj.values[:, :, val[:, 0], val[:, 1]], -1)
+            s0 = slice(val[:, 0][0], val[:, 0][-1]+1)
+            s1 = slice(val[:, 1][0], None if val[:, 0][0] == 0 else val[:, 0][0], -1)
+            print(s0, s1, obj.values.shape)
+            d_init = obj.values[..., s0, s1]
+            print(d_init.shape)
+            arr = xp.expand_dims(
+                xp.diagonal(d_init, axis1=2, axis2=3), -1)
             if val[0, 0] != 0:
                 prepend = obj._expand_dims(xp.array([xp.nan]*(val[0, 0]))[:, xp.newaxis])
                 arr = xp.concatenate((prepend, arr), -2)
-            if len(obj.origin)-1-val[-1, 0] != 0:
+            if len(obj.origin)-1-val[-1, 0] != 0 and xp != sp:
                 append = obj._expand_dims(
-                    xp.array([np.nan]*(len(obj.origin)-1-val[-1, 0]))[:, xp.newaxis])
+                    xp.zeros(len(obj.origin)-1-val[-1, 0])[:, xp.newaxis])
                 arr = xp.concatenate((arr, append), -2)
+            if xp == sp:
+                arr.shape = tuple(list(arr.shape[:2]) + [len(obj.origin)] + [1])
             if obj.is_cumulative and old_arr is not None:
                 arr = xp.isnan(arr)*xp.nan_to_num(old_arr) + xp.nan_to_num(arr)
             old_arr = arr.copy()
