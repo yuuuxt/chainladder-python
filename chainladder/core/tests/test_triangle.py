@@ -33,7 +33,8 @@ def test_slice_by_loc_iloc():
 
 def test_repr():
     tri = cl.load_dataset('raa')
-    np.testing.assert_array_equal(pd.read_html(tri._repr_html_())[0].set_index('Origin').values,
+    xp = cp.get_array_module(tri)
+    xp.testing.assert_array_equal(pd.read_html(tri._repr_html_())[0].set_index('Origin').values,
                             tri.to_frame().values)
 
 
@@ -158,12 +159,14 @@ def test_trend():
 
 def test_arithmetic_1():
     x = cl.load_dataset('mortgage')
-    np.testing.assert_array_equal(-(((x/x)+0)*x), -(+x))
+    xp = cp.get_array_module(x.values)
+    xp.testing.assert_array_equal(-(((x/x)+0)*x), -(+x))
 
 
 def test_arithmetic_2():
     x = cl.load_dataset('mortgage')
-    np.testing.assert_array_equal(1-(x/x), 0*x*0)
+    xp = cp.get_array_module(x.values)
+    xp.testing.assert_array_equal(1-(x/x), 0*x*0)
 
 
 def test_rtruediv():
@@ -209,7 +212,8 @@ def test_origin_and_value_setters():
 def test_grain_increm_arg():
     tri = cl.load_dataset('quarterly')['incurred']
     tri_i = tri.cum_to_incr()
-    np.testing.assert_array_equal(tri_i.grain('OYDY').incr_to_cum(),
+    xp = cp.get_array_module(tri)
+    xp.testing.assert_array_equal(tri_i.grain('OYDY').incr_to_cum(),
                             tri.grain('OYDY'))
 
 

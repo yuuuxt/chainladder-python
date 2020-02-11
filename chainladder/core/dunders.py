@@ -4,6 +4,7 @@
 import pandas as pd
 import numpy as np
 from chainladder.utils.cupy import cp
+from chainladder.utils.sparse import sp
 import copy
 
 class TriangleDunders:
@@ -84,9 +85,8 @@ class TriangleDunders:
 
     def _arithmetic_cleanup(self, obj):
         ''' Common functionality AFTER arithmetic operations '''
-        obj.values = obj.values * self._expand_dims(obj._nan_triangle())
-        obj.values[obj.values == 0] = np.nan
-        return obj
+        xp = cp.get_array_module(self.values)
+        return self._num_to_nan(obj)
 
     def __add__(self, other):
         xp = cp.get_array_module(self.values)
@@ -145,7 +145,9 @@ class TriangleDunders:
     def __rtruediv__(self, other):
         obj = copy.deepcopy(self)
         obj.values = other / self.values
-        obj.values[obj.values == 0] = np.nan
+        xp = cp.get_array_module(self.values)
+        if xp != sp:
+            obj.values[obj.values == 0] = np.nan
         return obj
 
     def __eq__(self, other):

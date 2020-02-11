@@ -231,9 +231,8 @@ class Triangle(TriangleBase):
         xp = cp.get_array_module(self.values)
         if inplace:
             if not self.is_cumulative:
-                xp.cumsum(xp.nan_to_num(self.values), axis=3, out=self.values)
-                self.values = self._expand_dims(self._nan_triangle())*self.values
-                self.values[self.values == 0] = np.nan
+                self.values = xp.cumsum(xp.nan_to_num(self.values), axis=3)
+                self = self._num_to_nan(self)
                 self.is_cumulative = True
             return self
         else:
@@ -258,8 +257,7 @@ class Triangle(TriangleBase):
                 temp = xp.nan_to_num(self.values)[..., 1:] - \
                     xp.nan_to_num(self.values)[..., :-1]
                 temp = xp.concatenate((self.values[..., 0:1], temp), axis=3)
-                temp = temp*self._expand_dims(self._nan_triangle())
-                temp[temp == 0] = np.nan
+                temp = self._num_to_nan(temp)
                 self.values = temp
                 self.is_cumulative = False
             return self
@@ -281,15 +279,31 @@ class Triangle(TriangleBase):
         -------
             Updated instance of triangle with valuation periods.
         '''
+        xp = cp.get_array_module(self.values)
         if inplace:
-            if self.is_val_tri:
+            if self.is_val_tri or self.shape[-1] == 1:
                 return self
-            if self.is_ultimate:
+            elif self.is_ultimate:
+                m_dims = {'Y':1, 'Q': 4, 'M': 12}
+                ult_dt = self.valuation.max()
                 ult = self[self.development==9999]
                 self = self[self.development<9999]
                 self = self._val_dev_chg('dev_to_val')
-                return self
-        return self._val_dev_chg('dev_to_val') if not self.is_val_tri else copy.deepcopy(self)
+                self.values = xp.concatenate(
+                    (self.values[..., :-m_dims[self.development_grain]],
+                     ult.values), -1)
+                self.ddims = pd.PeriodIndex(np.append(self.ddims, ult_dt))
+            else:
+                self = self._val_dev_chg('dev_to_val')
+                if xp != sp:
+                    self = self.dropna()
+            self.valuation = pd.PeriodIndex(
+                np.repeat(self.ddims.values[np.newaxis],
+                          len(self.origin)).reshape(1, -1).flatten())
+            return self
+        else:
+            new_obj = copy.deepcopy(self)
+            return new_obj.dev_to_val(inplace=True)
 
     def val_to_dev(self, inplace=False):
         ''' Converts triangle from a valuation triangle to a development lag
@@ -306,32 +320,37 @@ class Triangle(TriangleBase):
             Updated instance of triangle with development lags
         '''
         xp = cp.get_array_module(self.values)
-        if not self.is_val_tri:
-            ret_val = self
-        else:
-            if self.is_ultimate:
-                obj = self[self.valuation<'2262']
-                non_ultimates = obj.values
-                obj = obj._val_dev_chg('val_to_dev')
-                ultimate = self[self.valuation>='2262']
-                max_val = self[self.valuation<'2262'][self.origin == self.origin.max()].valuation.max()
-                max_dev = obj[obj.origin == obj.origin.max()]
-                max_dev = max_dev[max_dev.valuation == max_val].ddims[0]
-                obj = obj[obj.development <= max_dev]
-                obj.values = xp.concatenate(
-                    (obj.values, ultimate.values), axis=-1)
-                obj.ddims = np.concatenate((obj.ddims, np.array([9999])))
-                obj.valuation = obj._valuation_triangle(obj.ddims)
-                obj.valuation_date = max(obj.valuation).to_timestamp()
-                ret_val = obj
-            else:
-                ret_val = self._val_dev_chg('val_to_dev')
-        ret_val.values = self._expand_dims(ret_val._nan_triangle())*ret_val.values
         if inplace:
-            self = ret_val
-        return ret_val
+            if not self.is_val_tri or self.shape[-1] == 1:
+                ret_val = self
+            else:
+                if self.is_ultimate:
+                    obj = self[self.valuation<'2262']
+                    non_ultimates = obj.values
+                    obj = obj._val_dev_chg('val_to_dev')
+                    ultimate = self[self.valuation>='2262']
+                    max_val = self[self.valuation<'2262'][self.origin == self.origin.max()].valuation.max()
+                    max_dev = obj[obj.origin == obj.origin.max()]
+                    max_dev = max_dev[max_dev.valuation == max_val].ddims[0]
+                    obj = obj[obj.development <= max_dev]
+                    obj.values = xp.concatenate(
+                        (obj.values, ultimate.values), axis=-1)
+                    obj.ddims = np.concatenate((obj.ddims, np.array([9999])))
+                    obj.valuation = obj._valuation_triangle(obj.ddims)
+                    obj.valuation_date = max(obj.valuation).to_timestamp()
+                    ret_val = obj
+                else:
+                    ret_val = self._val_dev_chg('val_to_dev')
+            if xp != sp:
+                ret_val.values = self._expand_dims(ret_val._nan_triangle())*ret_val.values
+            return ret_val
+        else:
+            new_obj = copy.deepcopy(self)
+            return new_obj.val_to_dev(inplace=True)
+
 
     def _val_dev_chg(self, kind):
+        xp = cp.get_array_module(self.values)
         index = np.arange(1, np.prod(self.shape[2:])+1).reshape(self.shape[2:])
         idx_s = sparse.COO.from_numpy(index)
         dev_grain_dict = {'M': {'Y': 12, 'Q': 3, 'M': 1},
@@ -356,13 +375,18 @@ class Triangle(TriangleBase):
             new_idx_s.data.astype(int),
             pd.DataFrame(new_idx_s.coords.T).to_records(index=False)))
         idx_mapper = {k: n_dict[v] for k, v in o_dict.items()}
-        values = sparse.COO.from_numpy(self.values, fill_value=np.nan)
+        if xp != sp:
+            values = sparse.COO.from_numpy(self.values, fill_value=np.nan)
+        else:
+            values = self.values
         values.coords[2:] = np.array(
             [list(idx_mapper[str(item)])
              for item in pd.DataFrame(values.coords[2:].T).to_records(index=False)]).T
         values.shape = tuple(list(values.shape[:-1]) + [new_idx_s.shape[-1]])
         if kind == 'val_to_dev':
-            self.values = values[...,:-offset].todense()
+            self.values = values[...,:-offset]
+            if xp != sp:
+                self.values = self.values.todense()
             d_map = {'Y':12, 'Q': 3, 'M': 1}
             dev = pd.Series(self.ddims.to_timestamp(how='e'), name='dev').to_frame()
             dev['orig'] = self.origin[0].to_timestamp(how='s')
@@ -370,76 +394,12 @@ class Triangle(TriangleBase):
                          d_map[self.development_grain]).values
             self.valuation = self._valuation_triangle()
         else:
-            self.values = values.todense()
+            self.values = values
+            if xp != sp:
+                self.values = self.values.todense()
             values.shape = tuple(list(values.shape[:-1]) + [new_idx_s.shape[-1]])
             self.ddims = self.valuation.unique().sort_values()
-            self.valuation = pd.PeriodIndex(
-                np.repeat(self.ddims.values[np.newaxis],
-                          len(self.origin)).reshape(1, -1).flatten())
-        return self#.dropna()
-
-
-    def _val_dev_chg2(self, kind):
-        xp = cp.get_array_module(self.values)
-        obj = copy.deepcopy(self)
-        o_vals = obj._expand_dims(xp.arange(len(obj.origin))[:, xp.newaxis])
-        if self.shape[-1] == 1:
-            return obj
-        if kind == 'val_to_dev':
-            step = {'Y': 12, 'Q': 3, 'M': 1}[obj.development_grain]
-            mtrx = \
-                12*(obj.ddims.to_timestamp(how='e').year.values[np.newaxis] -
-                    obj.origin.to_timestamp(how='s')
-                       .year.values[:, np.newaxis]) + \
-                   (obj.ddims.to_timestamp(how='e').month.values[np.newaxis] -
-                    obj.origin.to_timestamp(how='s')
-                       .month.values[:, np.newaxis]) + 1
-            rng = range(mtrx[mtrx > 0].min(), mtrx.max()+1, step)
-        else:
-            rng = obj.valuation.unique().sort_values()
-        old_arr = None
-        for item in rng:
-            if kind == 'val_to_dev':
-                val = np.where(mtrx == item)
-            else:
-                val = np.where(obj._expand_dims(obj.valuation == item)
-                                  .reshape(obj.shape, order='f'))[-2:]
-            val = np.unique(np.array(list(zip(val[0], val[1]))), axis=0)
-            s0 = slice(val[:, 0][0], val[:, 0][-1]+1)
-            s1 = slice(val[:, 1][0], None if val[:, 0][0] == 0 else val[:, 0][0], -1)
-            print(s0, s1, obj.values.shape)
-            d_init = obj.values[..., s0, s1]
-            print(d_init.shape)
-            arr = xp.expand_dims(
-                xp.diagonal(d_init, axis1=2, axis2=3), -1)
-            if val[0, 0] != 0:
-                prepend = obj._expand_dims(xp.array([xp.nan]*(val[0, 0]))[:, xp.newaxis])
-                arr = xp.concatenate((prepend, arr), -2)
-            if len(obj.origin)-1-val[-1, 0] != 0 and xp != sp:
-                append = obj._expand_dims(
-                    xp.zeros(len(obj.origin)-1-val[-1, 0])[:, xp.newaxis])
-                arr = xp.concatenate((arr, append), -2)
-            if xp == sp:
-                arr.shape = tuple(list(arr.shape[:2]) + [len(obj.origin)] + [1])
-            if obj.is_cumulative and old_arr is not None:
-                arr = xp.isnan(arr)*xp.nan_to_num(old_arr) + xp.nan_to_num(arr)
-            old_arr = arr.copy()
-            o_vals = xp.concatenate((o_vals, arr), -1)
-        obj.values = o_vals[..., 1:]
-        obj.values[obj.values == 0] = xp.nan
-        if kind == 'val_to_dev':
-            obj.ddims = np.array([item for item in rng])
-            obj.valuation = obj._valuation_triangle()
-        else:
-            obj.ddims = obj.valuation.unique().sort_values()
-            obj.values = obj.values[..., :np.where(
-                obj.ddims.to_timestamp() <= obj.valuation_date)[0].max()+1]
-            obj.ddims = obj.ddims[obj.ddims.to_timestamp()
-                                  <= obj.valuation_date]
-            obj.valuation = pd.PeriodIndex(
-                np.repeat(obj.ddims.values[np.newaxis],
-                          len(obj.origin)).reshape(1, -1).flatten())
-        return obj
+        return self
 
 
     def grain(self, grain='', inplace=False):
@@ -467,7 +427,7 @@ class Triangle(TriangleBase):
             # Must be cumulative to work
             obj = self.incr_to_cum().dev_to_val(inplace=True)
         else:
-            obj = self.dev_to_val(inplace=True)
+            obj = self.dev_to_val()
         # put data in valuation mode
         ograin_new = grain[1:2]
         ograin_old = obj.origin_grain
@@ -511,7 +471,8 @@ class Triangle(TriangleBase):
             obj.ddims = obj.ddims[keeps]
         obj.origin_grain = ograin_new
         obj.development_grain = dgrain_new
-        obj.values[obj.values == 0] = xp.nan
+        if xp != sp:
+            obj.values[obj.values == 0] = xp.nan
         obj.valuation = obj._valuation_triangle()
         if hasattr(obj, '_nan_triangle_'):
             # Force update on _nan_triangle at next access.

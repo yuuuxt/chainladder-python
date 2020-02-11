@@ -4,6 +4,7 @@
 import pandas as pd
 import numpy as np
 from chainladder.utils.cupy import cp
+from chainladder.utils.sparse import sp
 import copy
 
 
@@ -21,8 +22,13 @@ class TriangleGroupBy:
         old_k_by_new_k = xp.zeros(
             (len(obj.index.index), len(groups)), dtype='bool')
         for num, item in enumerate(groups):
-            old_k_by_new_k[:, num][item] = True
+            if xp != sp:
+                old_k_by_new_k[:, num][item] = True
+            else:
+                old_k_by_new_k[:, num][item].data = True
+        print(old_k_by_new_k.shape, type(old_k_by_new_k))
         old_k_by_new_k = xp.swapaxes(old_k_by_new_k, 0, 1)
+        print(old_k_by_new_k.shape, type(old_k_by_new_k))
         for i in range(3):
             old_k_by_new_k = old_k_by_new_k[..., np.newaxis]
         self.old_k_by_new_k = old_k_by_new_k
@@ -237,8 +243,7 @@ def add_triangle_agg_func(cls, k, v):
             if axis == 3 and obj.values.shape[axis] == 1:
                 obj.ddims = np.array([None])
             obj._set_slicers()
-            obj.values = obj.values * obj._expand_dims(obj._nan_triangle())
-            obj.values[obj.values == 0] = np.nan
+            obj = self._num_to_nan(obj)
             if obj.shape == (1, 1, 1, 1):
                 return obj.values[0, 0, 0, 0]
             else:

@@ -1,4 +1,4 @@
-ARRAY_BACKEND = 'numpy'
+ARRAY_BACKEND = 'sparse'
 
 def array_backend(array_backend='numpy'):
     global ARRAY_BACKEND

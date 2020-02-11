@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import sparse
 from chainladder.utils.cupy import cp
+from chainladder.utils.sparse import sp
 import warnings
 
 from chainladder.core.display import TriangleDisplay
@@ -301,3 +302,13 @@ class TriangleBase(TriangleIO, TriangleDisplay, TriangleSlicer,
             if item:
                 return_list = return_list + item
         return return_list
+
+    def _num_to_nan(self, obj):
+        xp = cp.get_array_module(self.values)
+        if xp != sp:
+            obj.values = obj.values * obj._expand_dims(obj._nan_triangle())
+            obj.values[obj.values == 0] = np.nan
+        else:
+            obj.values.fill_value = np.nan
+            obj.values = sp(obj.values)
+        return obj

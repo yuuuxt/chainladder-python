@@ -4,6 +4,7 @@
 import pandas as pd
 import numpy as np
 from chainladder.utils.cupy import cp
+from chainladder.utils.sparse import sp
 import copy
 
 
@@ -14,6 +15,7 @@ class _LocBase:
 
     def get_idx(self, idx):
         ''' Returns a slice of the original Triangle '''
+        xp = cp.get_array_module(self.obj.values)
         obj = copy.deepcopy(self.obj)
         vdims = pd.Series(obj.vdims)
         obj.kdims = np.array(idx.index.unique())
@@ -26,7 +28,8 @@ class _LocBase:
                    for item in list(zip(*idx_slice))])
         obj.values = \
             obj.values[self._contig_slice(x[0])][:, self._contig_slice(x[1])]
-        obj.values[obj.values == 0] = np.nan
+        if xp != sp:
+            obj.values[obj.values == 0] = np.nan
         return obj
 
     def _contig_slice(self, arr):
