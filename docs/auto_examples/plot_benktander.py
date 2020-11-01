@@ -4,7 +4,7 @@ Benktander: Relationship between Chainladder and BornhuetterFerguson
 ====================================================================
 
 This example demonstrates the relationship between the Chainladder and
-BornhuetterFerguson methods by way fo the Benktander model. Each is a
+BornhuetterFerguson methods by way of the Benktander model. Each is a
 special case of the Benktander model where ``n_iters = 1`` for BornhuetterFerguson
 and as ``n_iters`` approaches infinity yields the chainladder.  As ``n_iters``
 increases the apriori selection becomes less relevant regardless of initial
